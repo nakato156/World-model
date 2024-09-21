@@ -7,19 +7,26 @@ from .utils import ImageDataset
 import os
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim):
+    def __init__(self, w, h, input_channels, latent_dim):
         super(Encoder, self).__init__()
+
         # Definiendo capas
-        self.input_layer = nn.Linear(input_dim, hidden_dim)
-        self.fc_mean = nn.Linear(hidden_dim, latent_dim)
-        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        self.conv_layers = nn.Sequential(
+            nn.Conv2d(in_channels=input_channels, out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU(), # salida => w * h * 32
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, padding=1),
+            nn.ReLU(), # salida => 32 * 32 * 64
+            nn.Flatten() # salida => 64 * w * h
+        )
+
+        self.fc_mean = nn.Linear(w * h * 64, latent_dim)
+        self.fc_var = nn.Linear(w * h * 64, latent_dim)
         
     def forward(self, x):
-        hidden = self.input_layer(x)
-        hidden = F.relu(hidden) # no linealidad entre capas
+        conv = self.conv_layers(x)
 
-        mean = self.fc_mean(hidden)
-        logvar = self.fc_var(hidden)
+        mean = self.fc_mean(conv)
+        logvar = self.fc_var(conv)
 
         return mean, logvar
     
@@ -41,20 +48,32 @@ class Encoder(nn.Module):
         return mean + eps * std
 
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, output_dim):
+    def __init__(self, w, h, latent_dim, output_dim):
         super(Decoder, self).__init__()
+        self.w = w
+        self.h = h
+        hidden_dim = w * h * 64 
+
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+
+        self.conv_t_layers = nn.Sequential(
+            nn.ConvTranspose2d(in_channels=hidden_dim, out_channels=64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(in_channels=32, out_channels=output_dim, kernel_size=3, stride=1, padding=1),
+        )
     
     def forward(self, z):
-        h = torch.relu(self.fc1(z))
-        return self.fc2(h)
+        out = torch.relu(self.fc1(z))
+        out = out.view(-1, 64, self.w, self.h)
+        return self.conv_t_layers(out)
 
 class VAE(nn.Module):
-    def __init__(self, input_dim, hidden_dim, laten_dim):
+    def __init__(self, w, h, input_dim, laten_dim):
         super(VAE, self).__init__()
-        self.encoder = Encoder(input_dim, hidden_dim, laten_dim)
-        self.decoder = Decoder(laten_dim, hidden_dim, input_dim)
+        self.encoder = Encoder(w, h, input_dim, laten_dim)
+        self.decoder = Decoder(w, h, laten_dim, input_dim)
     
     def forward(self, x):
         mean, logvar = self.encoder(x)
@@ -68,7 +87,7 @@ def loss_function(x, x_hat, mu, logvar):
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return BCE + KLD
 
-def train(epochs, image_dir, output_dir=None):
+def train(epochs, w, h, image_dir, output_dir=None):
     # hiperparametros
     input_dim = 784
     hidden_dim = 400
@@ -77,7 +96,7 @@ def train(epochs, image_dir, output_dir=None):
     batch_size = 128
     
     # VAE
-    vae = VAE(input_dim, hidden_dim, latent_dim)
+    vae = VAE(w, h, input_dim, latent_dim)
     optimizer = optim.Adam(vae.parameters(), lr=lr)
     vae.train()
     
