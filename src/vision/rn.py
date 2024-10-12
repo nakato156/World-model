@@ -6,7 +6,7 @@ class ActionNetwork(nn.Module):
     def __init__(self, latent_dim, action_dim):
         super(ActionNetwork, self).__init__()
         
-        # Definir una red neuronal simple con 2 capas ocultas
+        # red neuronal simple con 2 capas ocultas
         self.fc1 = nn.Linear(latent_dim, 128)
         self.fc2 = nn.Linear(128, 64)
         self.fc3 = nn.Linear(64, action_dim)
