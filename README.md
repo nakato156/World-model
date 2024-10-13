@@ -49,7 +49,7 @@ El proyecto está organizado de la siguiente manera:
 
 - **controller.py**: Gestiona la interacción del robot con el entorno, procesa las observaciones del entorno mediante el **VAE**, y elige acciones a través de la red neuronal **ActionNetwork**.
 - **vae.py**: Implementa el **VAE** para aprender un espacio latente comprimido a partir de las imágenes del entorno.
-- **neural_net.py**: Red neuronal simple que asigna las representaciones latentes del **VAE** a probabilidades de acciones.
+- **rn.py**: Red neuronal simple que asigna las representaciones latentes del **VAE** a probabilidades de acciones.
 - **utils.py**: Carga el conjunto de datos (imágenes) para el entrenamiento del VAE y facilita la preprocesamiento de datos.
 
 ---
