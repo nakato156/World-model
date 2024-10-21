@@ -20,7 +20,7 @@ class Megatron(nn.Module):
         transformer_output = self.transformer(combined)
         
         output = self.fc_out(transformer_output[-1])
-        return output
+        return output, transformer_output
 
 def default_config() -> dict:
     """
@@ -49,5 +49,5 @@ if __name__ == "__main__":
     actions = torch.rand(num_frames, 1, num_actions)    # (sequence_length, batch_size, num_actions)
 
     # Forward pass
-    predicted_frame = model(frames, actions)
+    predicted_frame, memory = model(frames, actions)
     print(predicted_frame.shape)
