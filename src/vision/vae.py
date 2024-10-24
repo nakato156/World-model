@@ -3,8 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader 
-from .utils import ImageDataset
+from utils import ImageDataset
 import os
+
+import numpy as np
 
 class Encoder(nn.Module):
     def __init__(self, w, h, input_channels, latent_dim):
@@ -12,19 +14,21 @@ class Encoder(nn.Module):
 
         # Definiendo capas
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(in_channels=input_channels, out_channels=32, kernel_size=3, padding=1),
+            # 36, 32, 3, 1
+            nn.Conv2d(in_channels=input_channels, out_channels=16, kernel_size=3, padding=1),
             nn.ReLU(), # salida => w * h * 32
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, padding=1),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=5, padding=2),
+            nn.ReLU(), # salida => 32 * 32 * 64
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, padding=2),
             nn.ReLU(), # salida => 32 * 32 * 64
             nn.Flatten() # salida => 64 * w * h
         )
-
-        self.fc_mean = nn.Linear(w * h * 64, latent_dim)
-        self.fc_var = nn.Linear(w * h * 64, latent_dim)
+        f = 64
+        self.fc_mean = nn.Linear(w * h * f, latent_dim)
+        self.fc_var = nn.Linear(w * h * f, latent_dim)
         
     def forward(self, x):
         conv = self.conv_layers(x)
-
         mean = self.fc_mean(conv)
         logvar = self.fc_var(conv)
 
@@ -52,22 +56,25 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.w = w
         self.h = h
-        hidden_dim = w * h * 64 
-
+        self.f = 64
+        hidden_dim = w * h * self.f
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
 
         self.conv_t_layers = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=hidden_dim, out_channels=64, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=5, padding=2),
             nn.ReLU(),
-            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3, stride=2, padding=1),
+            nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=5, padding=2),
             nn.ReLU(),
-            nn.ConvTranspose2d(in_channels=32, out_channels=output_dim, kernel_size=3, stride=1, padding=1),
+            nn.ConvTranspose2d(in_channels=16, out_channels=output_dim, kernel_size=3, padding=1),
+            nn.ReLU(),
         )
     
     def forward(self, z):
         out = torch.relu(self.fc1(z))
-        out = out.view(-1, 64, self.w, self.h)
-        return self.conv_t_layers(out)
+        out = out.view(z.size(0), self.f, self.h, self.w)
+        a= self.conv_t_layers(out)
+        
+        return a
 
 class VAE(nn.Module):
     def __init__(self, w, h, input_dim, laten_dim):
@@ -76,46 +83,62 @@ class VAE(nn.Module):
         self.decoder = Decoder(w, h, laten_dim, input_dim)
     
     def forward(self, x):
+        
         mean, logvar = self.encoder(x)
+        
         z = self.encoder.reparameterize(mean, logvar)
         return mean, logvar, self.decoder(z)
 
 def loss_function(x, x_hat, mu, logvar):
     x_hat_normalized = x_hat / 255.0
     x_normalized = x / 255.0
+    
+    if x.min() == np.NAN or x.max() == np.NAN:
+        print("x contains NaN values")
+
+        print(f"x min: {x.min().item()}, x max: {x.max().item()}")
+        print(f"x_hat min: {x_hat.min().item()}, x_hat max: {x_hat.max().item()}")
+    
     BCE = nn.functional.binary_cross_entropy(x_hat_normalized, x_normalized, reduction='sum')
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     return BCE + KLD
 
 def train(epochs, w, h, image_dir, output_dir=None):
     # hiperparametros
-    input_dim = 784
-    hidden_dim = 400
+    input_dim = 3
     latent_dim = 20
     lr=1e-3
-    batch_size = 128
+    batch_size = 16
+    
+    # Verifica si cuda está disponible
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     
     # VAE
-    vae = VAE(w, h, input_dim, latent_dim)
+    vae = VAE(w, h, input_dim, latent_dim).to(device)
     optimizer = optim.Adam(vae.parameters(), lr=lr)
+    
     vae.train()
+    
     
     # Carga del dataset
     train_dataset = ImageDataset(image_dir, transform=None)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
+    print("Training")
     for epoch in range(epochs):
         train_loss = 0
         for x in train_loader:
+            x = x.to(device)  # Mueve las imágenes al dispositivo
             optimizer.zero_grad()
             mean, logvar, x_hat = vae(x)
             loss = loss_function(x, x_hat, mean, logvar)
             loss.backward()
             optimizer.step()
+            # print("loss",loss.item())
             train_loss += loss.item()
-            optimizer.step()
 
-        print(f"Epoch {epoch + 1}, Loss: {train_loss / len(train_loader.dataset)}")
+        print(f"Epoch {epoch + 1}, Loss: {train_loss / len(train_loader)}")
     
     if output_dir:
         torch.save(vae.state_dict(), os.path.join(output_dir, 'vae.pth'))
