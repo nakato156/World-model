@@ -3,7 +3,7 @@ from vae import train
 import torch
 
 epochs = 100
-w, h = 128, 72
+w, h = 160, 90
 
 image_dir = 'images'  # Directorio donde están las 5 imágenestorch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

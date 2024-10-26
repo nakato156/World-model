@@ -1,3 +1,6 @@
 env/
 src/vision/images/
+src/vision/im-logs/
+
+*.pth
 __pycache__
