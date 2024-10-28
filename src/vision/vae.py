@@ -6,10 +6,10 @@ from torch.utils.data import DataLoader
 from utils import ImageDataset
 import os
 
-import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
+import datetime
+
+fecha = datetime.date.today().isoformat()
 
 class Encoder(nn.Module):
     def __init__(self, w, h, input_channels, latent_dim):
@@ -17,24 +17,25 @@ class Encoder(nn.Module):
 
         # Definiendo capas
         self.conv_layers = nn.Sequential(
-            # 36, 32, 3, 1
-            nn.Conv2d(in_channels=input_channels, out_channels=16, kernel_size=3, padding=1),
-            nn.ReLU(), # salida => w * h * 32
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=5, padding=2),
-            nn.ReLU(), # salida => 32 * 32 * 64
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, padding=2),
-            nn.ReLU(), # salida => 32 * 32 * 64
-            nn.Flatten() # salida => 64 * w * h
+            nn.Conv2d(input_channels, 32, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=4, stride=2),
+            nn.ReLU(),
         )
-        f = 64
-        self.fc_mean = nn.Linear(w * h * f, latent_dim)
-        self.fc_var = nn.Linear(w * h * f, latent_dim)
+
+        conv_output_dim = 7 * 14 * 256
+        self.fc_mean = nn.Linear(conv_output_dim, latent_dim)
+        self.fc_var = nn.Linear(conv_output_dim, latent_dim)
         
     def forward(self, x):
-        conv = self.conv_layers(x)
-        mean = self.fc_mean(conv)
-        logvar = self.fc_var(conv)
-
+        x = self.conv_layers(x)
+        x = torch.flatten(x, start_dim=1)
+        mean = self.fc_mean(x)
+        logvar = self.fc_var(x)
         return mean, logvar
     
     def reparameterize(self, mean, logvar): # crea el espacio latente
@@ -57,32 +58,26 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, w, h, latent_dim, output_dim):
         super(Decoder, self).__init__()
-        self.w = w
-        self.h = h
-        self.f = 64
-        hidden_dim = w * h * self.f
+        self.f = 256
+        hidden_dim = 7 * 14 * self.f
+
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
 
         self.conv_t_layers = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=5, padding=2),
+            nn.ConvTranspose2d(self.f, 128, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.LayerNorm([32, self.h, self.w]),
-            nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=5, padding=2),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.LayerNorm([16, self.h, self.w]),
-            nn.ConvTranspose2d(in_channels=16, out_channels=output_dim, kernel_size=3, padding=1),
+            nn.ConvTranspose2d(64, 32, kernel_size=5, stride=2,),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, output_dim, kernel_size=4, stride=2),
         )
     
     def forward(self, z):
         out = torch.relu(self.fc1(z))
-        # print("Después de fc1:", out.mean().item(), out.std().item())
-        out = out.view(z.size(0), self.f, self.h, self.w)
-        a = self.conv_t_layers(out)
-        # print("Salida antes de sigmoid:", a.mean().item(), a.std().item())
-        reconstructed = torch.sigmoid(a)
-        # print("Salida después de sigmoid:", reconstructed.mean().item(), reconstructed.std().item())
-
-        return reconstructed
+        out = out.view(-1, self.f, 7, 14)
+        out = self.conv_t_layers(out)
+        return torch.sigmoid(out)
 
 class VAE(nn.Module):
     def __init__(self, w, h, input_dim, laten_dim):
@@ -90,25 +85,17 @@ class VAE(nn.Module):
         self.encoder = Encoder(w, h, input_dim, laten_dim)
         self.decoder = Decoder(w, h, laten_dim, input_dim)
     
-    def forward(self, x):
-        # print("Entrada al Encoder - Mean:", x.mean().item(), "Std Dev:", x.std().item())
-    
-        mean, logvar = self.encoder(x)
-        
+    def forward(self, x):    
+        mean, logvar = self.encoder(x)        
         z = self.encoder.reparameterize(mean, logvar)
-        # print("Mean:", mean.mean().item(), "Std Dev:", z.std().item())
-
-        return mean, logvar, self.decoder(z)
-
-def loss_function(x, x_hat, mu, logvar):
-    x_hat_normalized = x_hat
-    x_normalized = x
-    # print("x_hat_normalized", x_hat_normalized.min().item(), x_hat_normalized.max().item())
-    # print("x_normalized", x_normalized.min().item(), x_normalized.max().item())
-    beta = 0.1
-    BCE = nn.functional.binary_cross_entropy(x_hat_normalized, x_normalized, reduction='sum')
-    KLD = -0.5 * beta * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return BCE + KLD
+        reconstructed = self.decoder(z)
+        return mean, logvar, reconstructed
+    
+    def loss_function(self, recon_x, x, mu, logvar, kl_tolerance=0.5):
+        recon_loss = nn.functional.mse_loss(recon_x, x, reduction='sum')
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kl_loss = torch.maximum(kl_loss, torch.tensor(kl_tolerance * mu.size(1)))
+        return recon_loss + kl_loss
 
 def show_images(original, reconstructed, epoch):
     original = original.cpu().numpy().transpose(0, 2, 3, 1)  # Pasa a formato HWC
@@ -124,15 +111,15 @@ def show_images(original, reconstructed, epoch):
     axs[1].set_title('Reconstruida')
     axs[1].axis('off')
     
-    plt.suptitle(f'Epoch {epoch}')
-    plt.show()
+    plt.suptitle(f'Epoch {epoch}')    
+    plt.savefig(f"im-logs/{epoch}.png")
 
 def train(epochs, w, h, image_dir, output_dir=None):
     # hiperparametros
     input_dim = 3
-    latent_dim = 20
+    latent_dim = 64
     lr=1e-3
-    batch_size = 1 # 4
+    batch_size = 4
     
     # Verifica si cuda está disponible
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,10 +143,10 @@ def train(epochs, w, h, image_dir, output_dir=None):
     for epoch in range(epochs):
         train_loss = 0
         for x in train_loader:
-            x = x.to(device) / 255.0    # Mueve las imágenes al dispositivo
+            x = x.to(device) / 255    # Mueve las imágenes al dispositivo
             optimizer.zero_grad()
             mean, logvar, x_hat = vae(x)
-            loss = loss_function(x, x_hat, mean, logvar)
+            loss = vae.loss_function(x_hat, x, mean, logvar)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -171,6 +158,7 @@ def train(epochs, w, h, image_dir, output_dir=None):
                 sample = x[:1]  # Selecciona una imagen del batch
                 _, _, reconstructed = vae(sample)
                 show_images(sample, reconstructed, epoch + 1)
-            
+                torch.save(vae.state_dict(), os.path.join(output_dir, f'vae_{fecha}.pth'))
+
     if output_dir:
-        torch.save(vae.state_dict(), os.path.join(output_dir, 'vae.pth'))
+        torch.save(vae.state_dict(), os.path.join(output_dir, f'vae_final_{fecha}.pth'))

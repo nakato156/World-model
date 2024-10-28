@@ -16,9 +16,9 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         image_path = self.image_files[idx]
         image = np.array(Image.open(image_path).convert('RGB'), dtype=np.float32)
-
-        if image.shape[:2] != (90, 160):
-            image = np.array(Image.fromarray(image.astype(np.uint8)).resize((160, 90)), dtype=np.float32)
+        size = (256, 144)
+        if image.shape[:2] != size[::-1]:
+            image = np.array(Image.fromarray(image.astype(np.uint8)).resize(size), dtype=np.float32)
         
         if self.transform:
             image = self.transform(image)
