@@ -1,7 +1,7 @@
 import torch
-from vae import VAE
-from rn import ActionNetwork
-from utils import ImageDataset
+from src.vision.vae import VAE
+from src.vision.rn import ActionNetwork
+from src.vision.utils import ImageDataset
 from torch.utils.data import DataLoader
 
 class Controller:
