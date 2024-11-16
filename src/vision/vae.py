@@ -3,11 +3,12 @@ import torch.nn as nn
 from torchvision import transforms
 import torch.optim as optim
 from torch.utils.data import DataLoader 
-from utils import ImageDataset
+from .utils import ImageDataset
 import os
 
 import matplotlib.pyplot as plt
 import datetime
+import json
 
 fecha = datetime.date.today().isoformat()
 
@@ -25,6 +26,7 @@ class Encoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=4, stride=2),
             nn.ReLU(),
+            # nn.Flatten()
         )
 
         conv_output_dim = 7 * 14 * 256
@@ -32,7 +34,9 @@ class Encoder(nn.Module):
         self.fc_var = nn.Linear(conv_output_dim, latent_dim)
         
     def forward(self, x):
+        # print("Input:", x.shape)
         x = self.conv_layers(x)
+        # print("X:", x.shape)
         x = torch.flatten(x, start_dim=1)
         mean = self.fc_mean(x)
         logvar = self.fc_var(x)
@@ -58,6 +62,8 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, w, h, latent_dim, output_dim):
         super(Decoder, self).__init__()
+        self.w = w
+        self.h = h
         self.f = 256
         hidden_dim = 7 * 14 * self.f
 
@@ -74,10 +80,17 @@ class Decoder(nn.Module):
         )
     
     def forward(self, z):
+        # apply view for unflatten
         out = torch.relu(self.fc1(z))
+        # print("Out1:", out.shape)
+
         out = out.view(-1, self.f, 7, 14)
-        out = self.conv_t_layers(out)
-        return torch.sigmoid(out)
+        # print("Out2:", out.shape)
+
+        a = self.conv_t_layers(out)
+        # print("convT:", a.shape)
+        reconstructed = torch.sigmoid(a)
+        return reconstructed
 
 class VAE(nn.Module):
     def __init__(self, w, h, input_dim, laten_dim):
@@ -85,9 +98,13 @@ class VAE(nn.Module):
         self.encoder = Encoder(w, h, input_dim, laten_dim)
         self.decoder = Decoder(w, h, laten_dim, input_dim)
     
-    def forward(self, x):    
-        mean, logvar = self.encoder(x)        
+    def forward(self, x):
+        # print("Entrada al Encoder - Mean:", x.mean().item(), "Std Dev:", x.std().item())
+    
+        mean, logvar = self.encoder(x)
+        
         z = self.encoder.reparameterize(mean, logvar)
+        # print("Mean:", mean.mean().item(), "Std Dev:", z.std().item())
         reconstructed = self.decoder(z)
         return mean, logvar, reconstructed
     
@@ -98,6 +115,9 @@ class VAE(nn.Module):
         return recon_loss + kl_loss
 
 def show_images(original, reconstructed, epoch):
+    if not os.path.exists("im-logs"):
+        os.makedirs("im-logs")
+
     original = original.cpu().numpy().transpose(0, 2, 3, 1)  # Pasa a formato HWC
     reconstructed = reconstructed.cpu().detach().numpy().transpose(0, 2, 3, 1)  # Pasa a formato HWC
 
@@ -115,6 +135,9 @@ def show_images(original, reconstructed, epoch):
     plt.savefig(f"im-logs/{epoch}.png")
 
 def train(epochs, w, h, image_dir, output_dir=None):
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
     # hiperparametros
     input_dim = 3
     latent_dim = 64
@@ -139,6 +162,9 @@ def train(epochs, w, h, image_dir, output_dir=None):
     train_dataset = ImageDataset(image_dir, transform=transform)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
+    # Registro de pérdidas
+    epoch_losses = []
+
     print("Training")
     for epoch in range(epochs):
         train_loss = 0
@@ -151,7 +177,9 @@ def train(epochs, w, h, image_dir, output_dir=None):
             optimizer.step()
             train_loss += loss.item()
 
-        print(f"Epoch {epoch + 1}, Loss: {train_loss / len(train_loader)}")
+        avg_loss = train_loss / len(train_loader)
+        epoch_losses.append(avg_loss)
+        print(f"Epoch {epoch + 1}, Loss: {avg_loss}")
 
         if epoch % 10 == 0:
             with torch.no_grad():
@@ -160,5 +188,17 @@ def train(epochs, w, h, image_dir, output_dir=None):
                 show_images(sample, reconstructed, epoch + 1)
                 torch.save(vae.state_dict(), os.path.join(output_dir, f'vae_{fecha}.pth'))
 
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, epochs + 1), epoch_losses, label="Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss Over Epochs")
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, f"training_loss_{fecha}.png"))
+    plt.show()
+
     if output_dir:
+        with open(os.path.join(output_dir, f'training_stats_{fecha}.json'), 'w') as f:
+            json.dump({"epoch_losses": epoch_losses}, f)
+
         torch.save(vae.state_dict(), os.path.join(output_dir, f'vae_final_{fecha}.pth'))

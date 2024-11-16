@@ -1,53 +1,66 @@
 import torch
 import torch.nn as nn
+from vision import VAE
+from .ActionEncoder import ActionEncoder
+
+class TRANS(nn.Module):
+    def __init__(self, d_model, nhead, num_layers):
+        super(TRANS, self).__init__()
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=nhead,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
+            batch_first=True
+        )
+        self.fc_out = nn.Linear(d_model, d_model)
+
+    def forward(self, combined_seq):
+        transformer_output = self.transformer(combined_seq, combined_seq)
+        output = self.fc_out(transformer_output[:, -1, :])
+        return output
 
 class Megatron(nn.Module):
-    def __init__(self, num_frames, num_actions, d_model, nhead, num_layers):
+    def __init__(self, w, h, input_dim, latent_dim, key_vocab, modifier_vocab, embedding_dim, d_model, nhead, num_layers):
         super(Megatron, self).__init__()
-        self.embedding_frame = nn.Linear(num_frames, d_model)
-        self.embedding_action = nn.Linear(num_actions, d_model)
+        self.vae = VAE(w, h, input_dim, latent_dim)
+        self.action_encoder = ActionEncoder(key_vocab, modifier_vocab, embedding_dim)
+        self.fc_combined = nn.Linear(latent_dim + embedding_dim, d_model)
+        self.transformer = TRANS(d_model, nhead, num_layers)
+    
+    def forward(self, frames, key_lists):
+        batch_size, seq_length, C, H, W = frames.size()
+        device = frames.device
         
-        self.transformer = nn.Transformer(d_model, nhead, num_layers)
-        self.fc_out = nn.Linear(d_model, num_frames)
-
-    def forward(self, frames, actions):
-        frame_emb = self.embedding_frame(frames)
-        action_emb = self.embedding_action(actions)
+        z_seq = []
+        for t in range(seq_length):
+            frame = frames[:, t, :, :, :]
+            mean, logvar, _ = self.vae(frame)
+            z = self.vae.encoder.reparameterize(mean, logvar)
+            z_seq.append(z)
+        z_seq = torch.stack(z_seq, dim=1)
         
-        # Combinar embeddings
-        combined = frame_emb + action_emb
+        action_seq = self.action_encoder(key_lists)
         
-        transformer_output = self.transformer(combined)
+        combined_seq = torch.cat([z_seq, action_seq], dim=-1)
+        combined_seq = self.fc_combined(combined_seq)
         
-        output = self.fc_out(transformer_output[-1])
-        return output, transformer_output
+        output = self.transformer(combined_seq)
+        return output
 
 def default_config() -> dict:
     """
     Configuracion default de hyperparametros
     """
     return {
-        "num_frames": 10,
-        "num_actions": 5,
+        "w": 64,
+        "h": 36,
+        "input_dim": 3,
+        "latent_dim": 32,
+        "embedding_dim": 36,
+        "num_frames": 14,
+        "num_actions": 36,
         "d_model": 64,
-        "nhead": 6,
+        "nhead": 1,
         "num_layers": 3,
     }
-
-if __name__ == "__main__":
-    config = default_config()
-    num_frames = config["num_frames"]
-    num_actions = config["num_actions"]
-    d_model = config["d_model"]
-    nhead = config["nhead"]
-    num_layers = config["num_layers"]
-
-    model = Megatron(num_frames, num_actions, d_model, nhead, num_layers)
-
-    # Dummy data
-    frames = torch.rand(num_frames, 1, num_frames)      # (sequence_length, batch_size, num_frames)
-    actions = torch.rand(num_frames, 1, num_actions)    # (sequence_length, batch_size, num_actions)
-
-    # Forward pass
-    predicted_frame, memory = model(frames, actions)
-    print(predicted_frame.shape)
