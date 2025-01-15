@@ -6,4 +6,5 @@ src/im-logs/
 
 
 *.pth
+src/output
 __pycache__

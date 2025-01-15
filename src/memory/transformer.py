@@ -6,6 +6,12 @@ from .ActionEncoder import ActionEncoder
 class TRANS(nn.Module):
     def __init__(self, d_model, nhead, num_layers):
         super(TRANS, self).__init__()
+        self.pos_encoder = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Linear(d_model, d_model)
+        )
+
         self.transformer = nn.Transformer(
             d_model=d_model,
             nhead=nhead,
@@ -16,6 +22,7 @@ class TRANS(nn.Module):
         self.fc_out = nn.Linear(d_model, d_model)
 
     def forward(self, combined_seq):
+        combined_seq = self.pos_encoder(combined_seq)
         transformer_output = self.transformer(combined_seq, combined_seq)
         output = self.fc_out(transformer_output[:, -1, :])
         return output
@@ -32,21 +39,25 @@ class Megatron(nn.Module):
         batch_size, seq_length, C, H, W = frames.size()
         device = frames.device
         
-        z_seq = []
-        for t in range(seq_length):
-            frame = frames[:, t, :, :, :]
-            mean, logvar, _ = self.vae(frame)
-            z = self.vae.encoder.reparameterize(mean, logvar)
-            z_seq.append(z)
-        z_seq = torch.stack(z_seq, dim=1)
+        batch_size, seq_length, C, H, W = frames.size()
+        frames = frames.view(batch_size * seq_length, C, H, W)
+        mean, logvar, _ = self.vae(frames)
+        z = self.vae.encoder.reparameterize(mean, logvar)
+        z_seq = z.view(batch_size, seq_length, -1)
         
         action_seq = self.action_encoder(key_lists)
         
         combined_seq = torch.cat([z_seq, action_seq], dim=-1)
         combined_seq = self.fc_combined(combined_seq)
         
-        output = self.transformer(combined_seq)
-        return output
+        transformer_output = self.transformer(combined_seq)
+        output = self.fc_out(transformer_output[:, -1, :])  # Usamos el último token para la predicción
+    
+        # Aquí puedes separar la predicción en el fotograma y la acción
+        next_frame = self.predict_next_frame(output)  # Implementar una capa de predicción para el fotograma
+        next_action = self.predict_next_action(output)  # Implementar una capa de predicción para la acción
+        
+        return next_frame, next_action
 
 def default_config() -> dict:
     """

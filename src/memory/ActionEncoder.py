@@ -12,6 +12,7 @@ class ActionEncoder(nn.Module):
         
         # Embeddings para modificadores
         self.modifier_embedding = nn.Embedding(len(modifier_vocab), embedding_dim)
+        self.fc_combined = nn.Linear(embedding_dim + embedding_dim, embedding_dim)
     
     def forward(self, key_lists):
         """
@@ -49,4 +50,7 @@ class ActionEncoder(nn.Module):
         
         # Combinar las teclas base con sus modificadores
         action_embeddings = base_embedding_tensor + modifier_embedding_tensor
+        combined = torch.cat([base_embedding_tensor, modifier_embedding_tensor], dim=-1)
+
+        action_embeddings = self.fc_combined(combined)
         return action_embeddings
